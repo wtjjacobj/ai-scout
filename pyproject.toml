@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-scout"
+version = "0.2.0"
+description = "AI项目发现引擎 — 发现→分类→评分→API"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=3.0",
+    "fastapi>=0.100",
+    "uvicorn>=0.25",
+    "requests>=2.31",
+]
+
+[project.scripts]
+ai-scout = "ai_scout.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_scout"]

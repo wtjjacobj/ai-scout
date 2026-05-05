@@ -1,0 +1,5 @@
+data/ai_scout.db
+__pycache__/
+.venv/
+*.pyc
+output/
