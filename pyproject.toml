@@ -4,14 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-scout"
-version = "0.2.0"
-description = "AI项目发现引擎 — 发现→分类→评分→API"
+version = "0.3.0"
+description = "AI项目发现引擎 — 发现→分类→评分→API。面向AI Agent的开源项目雷达。"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=3.0",
     "fastapi>=0.100",
     "uvicorn>=0.25",
     "requests>=2.31",
+    "aiohttp>=3.9",
 ]
 
 [project.scripts]
