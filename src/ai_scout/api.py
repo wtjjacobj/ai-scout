@@ -31,7 +31,7 @@ def health():
     con = get_db()
     try:
         stats = get_stats(con)
-        return {"status": "ok", "version": "0.2.0", "stats": stats}
+        return {"status": "ok", "version": "0.3.0", "stats": stats}
     finally:
         con.close()
 

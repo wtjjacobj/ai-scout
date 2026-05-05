@@ -16,10 +16,10 @@ CST = timezone(timedelta(hours=8))
 
 mcp = FastMCP(
     "ai-scout",
-    version="0.2.0",
+    version="0.3.0",
     instructions=(
         "AI Scout — AI项目发现引擎。帮你找到今天最值得关注的AI开源项目。"
-        "数据来源：GitHub Trending + Hacker News + MCP Registry + OSSInsight。"
+        "数据来源：GitHub Trending + Hacker News + MCP Registry。"
         "支持按分类、评分、趋势查询。"
     ),
 )
