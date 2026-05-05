@@ -1,132 +1,158 @@
-# AI Scout 🔍
+# AI Scout — AI Agent Capability Discovery Engine
 
-> **AI项目发现引擎 — 发现 → 分类 → 评分 → API**
->
-> 面向AI Agent的开源项目雷达。Agent不用自己去GitHub翻项目，查一眼就知道今天该关注什么。
+> The discovery layer AI agents didn't know they needed.
 
-[![MCP Server](https://img.shields.io/badge/MCP-Server-blue)](https://modelcontextprotocol.io)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-green)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
+AI Scout is an MCP server that helps AI agents discover, evaluate, and install the right tools, skills, and infrastructure for their tasks. Think of it as a knowledgeable curator that any agent can query.
 
-## 🎯 解决什么问题
+## Why?
 
-AI Agent需要知道最新的AI工具和框架，但GitHub trending太泛、awesome-list太静态、手动搜索太慢。
+AI agents today are blind to the ecosystem of tools available to them. When Claude Code needs to scrape a website, when Cursor needs to add memory, when any agent needs to find the right MCP server — there's no single place to look. AI Scout fills that gap.
 
-**AI Scout自动采集 → 智能分类 → 多维评分 → 暴露API**，Agent直接查就行。
+## MCP Tools
 
-## ✨ 特性
-
-| 特性 | 说明 |
-|---|---|
-| 🔄 **多源采集** | GitHub Search + MCP Registry + Hacker News + OSSInsight，异步并发 |
-| 🏷️ **AI自动分类** | framework / model / tool / data / infra，规则引擎 |
-| 📊 **多维评分** | 动量(star增速+社交) × 0.5 + 质量(绝对值) × 0.3 + 分类权重 × 0.2 |
-| 🛡️ **Spam过滤** | 自动过滤赌博/空投/垃圾项目，安全POC降权 |
-| 🌐 **REST API** | 6个端点，FastAPI，外部直接HTTP调用 |
-| 🔌 **MCP Server** | 5个工具，AI Agent直接连上来查 |
-| ⏰ **Cron调度** | 每日自动采集+评分，飞书推送 |
-
-## 🚀 快速开始
-
-```bash
-# 安装
-git clone https://github.com/your-username/ai-scout.git
-cd ai-scout
-python3.12 -m venv .venv
-.venv/bin/pip install -e .
-
-# 采集（异步并发）
-.venv/bin/python -m ai_scout.collector_async
-
-# 评分
-.venv/bin/python -m ai_scout.scorer
-
-# 启动REST API
-.venv/bin/uvicorn ai_scout.api:app --host 0.0.0.0 --port 8900
-
-# 启动MCP Server (stdio)
-.venv/bin/ai-scout
-
-# MCP Server (HTTP)
-.venv/bin/ai-scout --streamable-http --port 8901
-```
-
-## 🔌 MCP Server 工具
-
-| 工具 | 说明 | 示例 |
-|---|---|---|
-| `daily_report` | 今日精选 | "今天有什么AI项目值得关注？" |
-| `search_projects` | 搜索项目 | "找MCP server相关项目" |
-| `get_trending` | 趋势榜 | "最近7天最火的AI项目" |
-| `project_detail` | 项目详情 | "tell me about n8n-io/n8n" |
-| `scout_stats` | 数据统计 | "你追踪了多少项目？" |
-
-### Claude Desktop / Hermes 配置
+### `daily_brief()`
+Get today's curated picks — 3-5 noteworthy capabilities covering different product types. Call once per day.
 
 ```json
 {
-  "mcpServers": {
-    "ai-scout": {
-      "command": "/path/to/ai-scout/.venv/bin/python",
-      "args": ["-m", "ai_scout.server"]
+  "date": "2026-05-06",
+  "total_enriched": 1987,
+  "items": [
+    {
+      "full_name": "upstash/context7",
+      "product_type": "knowledge_retrieval",
+      "summary": "MCP server that injects up-to-date library documentation...",
+      "why_now": "trending: +54312 stars this week",
+      "install": {"node": "npx ctx7 setup"},
+      "llm_quality_score": 92
     }
+  ]
+}
+```
+
+### `recommend(query)`
+Find capabilities matching a natural language task description. Returns ranked candidates with install commands and trade-offs.
+
+```
+recommend(query="add long-term memory to my agent")
+recommend(query="web scraping with JavaScript rendering")
+recommend(query="route between multiple LLM providers")
+```
+
+### `project_detail(full_name)`
+Get the full manifest for a specific project by `owner/repo`.
+
+```
+project_detail(full_name="firecrawl/firecrawl-mcp-server")
+```
+
+## Product Types
+
+| Type | Description |
+|------|-------------|
+| `capability_tool` | MCP servers, plugins, callable tools |
+| `memory_infra` | Persistent memory (Mem0, Letta, GBrain) |
+| `runtime_exec` | Sandboxes, execution environments (E2B, Browserbase) |
+| `framework_orchestration` | Agent frameworks (LangGraph, CrewAI, DSPy) |
+| `observability_eval` | Monitoring, tracing, eval (Langfuse, LangSmith) |
+| `routing_gateway` | Model routers (LiteLLM, OpenRouter) |
+| `knowledge_retrieval` | Vector DBs, RAG (Chroma, Qdrant) |
+| `auth_perm` | Auth/permissions (Composio, Arcade) |
+
+## Stats
+
+- **1987** indexed projects
+- **9** product type categories
+- **5** discovery sources (GitHub, Smithery, npm, awesome-lists, watchlist)
+- **TF-IDF** semantic search with 4532 features
+
+## Installation
+
+```bash
+# Clone
+git clone https://github.com/your-org/ai-scout.git
+cd ai-scout
+
+# Install
+pip install -e .
+
+# Run as MCP server (stdio)
+ai-scout
+
+# Run as HTTP server
+ai-scout --streamable-http --port 8900
+```
+
+### Configure in Claude Code
+
+Add to your MCP settings:
+```json
+{
+  "ai-scout": {
+    "command": "ai-scout",
+    "args": []
   }
 }
 ```
 
-## 🌐 REST API
+### Configure in Cursor
 
-| 端点 | 说明 |
-|---|---|
-| `GET /api/health` | 服务状态+统计 |
-| `GET /api/daily?limit=10` | 每日精选 |
-| `GET /api/trending?days=7` | 趋势项目（star增速） |
-| `GET /api/projects?category=tool&min_score=20` | 项目列表 |
-| `GET /api/projects/{owner/repo}` | 项目详情（含历史、评分、HN讨论） |
-| `GET /api/categories` | 分类统计 |
-
-## 📊 评分模型
-
-```
-Composite = Momentum × 0.5 + Quality × 0.3 + Category × 0.2
-
-Momentum (0-100): star 24h/7d增速 + HN/Reddit社交热度
-Quality  (0-100): star绝对值 + forks绝对值
-Category (0-30):  AI分类加分 + MCP/Agent等热门主题加分
+Add to `.cursor/mcp.json`:
+```json
+{
+  "ai-scout": {
+    "command": "ai-scout"
+  }
+}
 ```
 
-### 分类体系
-
-| 分类 | 说明 | 示例 |
-|---|---|---|
-| `framework` | Agent/RAG/工作流框架 | LangChain, CrewAI |
-| `model` | LLM/模型/检查点 | LLaMA, Stable Diffusion |
-| `tool` | CLI/MCP Server/工具 | FastMCP, ComfyUI |
-| `data` | 数据集/向量库/基准 | MMLU, Chroma |
-| `infra` | 推理/训练/量化/部署 | vLLM, llama.cpp |
-
-## 🏗️ 架构
+## Architecture
 
 ```
-src/ai_scout/
-├── db.py              # SQLite数据层（4表：projects/snapshots/scores/hn_refs）
-├── collector.py       # 同步采集器（兼容旧版）
-├── collector_async.py # 异步并发采集器（3-5x更快）
-├── scorer.py          # 多维评分引擎 + spam过滤
-├── api.py             # REST API（FastAPI）
-├── server.py          # MCP Server（FastMCP 3.x）
-├── migrate.py         # JSON→SQLite迁移
-data/
-└── ai_scout.db        # SQLite数据库
+┌─────────────────────────────────┐
+│   External MCP Server (server.py) │
+│   daily_brief / recommend /       │
+│   project_detail                  │
+└──────────┬──────────────────────┘
+           │ reads
+┌──────────▼──────────────────────┐
+│   SQLite DB (ai_scout.db)        │
+│   1987 projects + TF-IDF index   │
+└──────────▲──────────────────────┘
+           │ writes
+┌──────────┴──────────────────────┐
+│   Hermes Maintenance Cron        │
+│   discover → triage → enrich →   │
+│   index → report                 │
+└─────────────────────────────────┘
 ```
 
-## 🔧 环境变量
+**Two layers:**
+- **Outer**: Public MCP server, read-only, serves agents
+- **Inner**: Hermes agent continuously discovers, classifies, and indexes new projects
 
-| 变量 | 说明 | 必需 |
-|---|---|---|
-| `AI_SCOUT_DB` | SQLite数据库路径 | 否（默认 data/ai_scout.db） |
-| `GITHUB_TOKEN` | GitHub API token（提高rate limit） | 否 |
+## Discovery Sources
 
-## 📜 License
+The Hermes agent crawls these sources every 6 hours:
+1. **GitHub Search** — new AI/MCP/agent repos (7-14 day window)
+2. **Smithery** — MCP server registry
+3. **npm** — packages tagged mcp-server, agent-tool, claude-skill
+4. **awesome-mcp-servers** — 2000+ MCP server list
+5. **Watchlist** — 50+ core infra project releases
+
+## Development
+
+```bash
+# Run discovery
+python -m ai_scout.hermes.discover
+
+# Build TF-IDF index
+python -m ai_scout.hermes.embed index
+
+# Check stats
+python -m ai_scout.hermes.maintain stats
+```
+
+## License
 
 MIT

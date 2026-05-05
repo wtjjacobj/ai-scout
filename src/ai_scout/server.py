@@ -1,182 +1,357 @@
 """
-AI Scout MCP Server — AI Agent直接连接查询
-FastMCP 3.x, stdio + streamable-http双模式
+AI Scout MCP Server v0.4 — AI Agent Capability Discovery
+
+Tools:
+  daily_brief:   Agent pulls today's curated picks (3-5 items, covering different product types)
+  recommend:     Agent queries for capabilities matching a natural language task description
+  project_detail: Agent gets full manifest for a specific project
+
+FastMCP 3.x, stdio + streamable-http dual mode.
 """
 
 import json
+import math
 from datetime import datetime, timezone, timedelta
+
 from fastmcp import FastMCP
 
-from .db import (
-    get_db, query_projects, query_trending,
-    get_project_detail, get_stats,
-)
+from .db import get_db
+from .hermes.embed import search as semantic_search
 
 CST = timezone(timedelta(hours=8))
 
 mcp = FastMCP(
     "ai-scout",
-    version="0.3.0",
+    version="0.4.0",
     instructions=(
-        "AI Scout — AI项目发现引擎。帮你找到今天最值得关注的AI开源项目。"
-        "数据来源：GitHub Trending + Hacker News + MCP Registry。"
-        "支持按分类、评分、趋势查询。"
+        "AI Scout — AI Agent Capability Discovery Engine. "
+        "Helps agents find the right tools, skills, and infrastructure for their tasks. "
+        "Use daily_brief() to get today's curated picks, recommend() to find capabilities "
+        "matching a specific task, and project_detail() for detailed info on a specific project."
     ),
 )
 
 
-@mcp.tool(name="daily_report", description="获取今日精选AI项目（综合评分最高的项目）")
-def daily_report(limit: int = 10) -> str:
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def _get_manifest_projects(con, limit=20, offset=0, product_type=None,
+                           min_quality=0, order_by="quality") -> list[dict]:
+    """Query enriched projects with manifest data."""
+    where = ["p.is_active = 1", "p.product_type IS NOT NULL", "p.summary IS NOT NULL"]
+    params = []
+
+    if product_type:
+        where.append("p.product_type = ?")
+        params.append(product_type)
+    if min_quality > 0:
+        where.append("COALESCE(p.llm_quality_score, 0) >= ?")
+        params.append(min_quality)
+
+    where_clause = " AND ".join(where)
+
+    # Order options
+    order_map = {
+        "quality": "COALESCE(p.llm_quality_score, 0) DESC",
+        "stars": "COALESCE(s.stars, 0) DESC",
+        "freshness": "p.last_enriched_at DESC",
+        "name": "p.full_name ASC",
+    }
+    order_sql = order_map.get(order_by, order_map["quality"])
+
+    sql = f"""
+        SELECT p.id, p.full_name, p.url, p.description, p.language,
+               p.product_type, p.summary, p.solves, p.compatible_with,
+               p.install, p.integration_shape, p.requires,
+               p.llm_quality_score, p.last_enriched_at,
+               COALESCE(s.stars, 0) as stars
+        FROM projects p
+        LEFT JOIN snapshots s ON s.project_id = p.id
+            AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM snapshots WHERE project_id = p.id)
+        WHERE {where_clause}
+        ORDER BY {order_sql}
+        LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    rows = con.execute(sql, params).fetchall()
+    return [_format_manifest(dict(r)) for r in rows]
+
+
+def _format_manifest(row: dict) -> dict:
+    """Parse JSON fields in a manifest row."""
+    for field in ("solves", "compatible_with", "install", "requires", "topics"):
+        val = row.get(field)
+        if isinstance(val, str):
+            try:
+                row[field] = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                row[field] = []
+    return row
+
+
+def _compute_why_now(con, project_id: int) -> str:
+    """Determine why this project is notable today."""
+    row = con.execute(
+        """SELECT p.last_enriched_at, p.created_at,
+                  (SELECT s.stars_7d FROM snapshots s WHERE s.project_id = p.id
+                   ORDER BY s.snapshot_date DESC LIMIT 1) as stars_7d,
+                  (SELECT s.stars_24h FROM snapshots s WHERE s.project_id = p.id
+                   ORDER BY s.snapshot_date DESC LIMIT 1) as stars_24h
+           FROM projects p WHERE p.id = ?""",
+        (project_id,)
+    ).fetchone()
+    if not row:
+        return "Recently indexed"
+
+    reasons = []
+    if row["stars_24h"] and row["stars_24h"] > 100:
+        reasons.append(f"hot: +{row['stars_24h']} stars in 24h")
+    if row["stars_7d"] and row["stars_7d"] > 500:
+        reasons.append(f"trending: +{row['stars_7d']} stars this week")
+    if row["last_enriched_at"]:
+        enriched = datetime.fromisoformat(row["last_enriched_at"])
+        if (datetime.now(CST) - enriched).days < 3:
+            reasons.append("newly cataloged")
+    if not reasons:
+        reasons.append("established capability")
+    return reasons[0]
+
+
+# =============================================================================
+# Tools
+# =============================================================================
+
+@mcp.tool(
+    name="daily_brief",
+    description=(
+        "Get today's curated picks — 3-5 noteworthy AI agent capabilities, "
+        "covering different product types (tools, memory, runtimes, frameworks, etc). "
+        "Call once per day. Each item has name, type, summary, why it's notable today, "
+        "and install commands."
+    ),
+)
+def daily_brief() -> str:
     con = get_db()
     try:
-        projects = query_projects(con, limit=limit, order_by="composite_score")
-        if not projects:
-            return "今日暂无数据，请先运行采集。"
+        # Get enriched projects, one per product_type, ordered by quality + freshness
+        # First, get all product types that have at least one enriched project
+        types_rows = con.execute(
+            """SELECT DISTINCT product_type FROM projects
+               WHERE is_active = 1 AND product_type IS NOT NULL AND summary IS NOT NULL
+               ORDER BY product_type"""
+        ).fetchall()
+        available_types = [r["product_type"] for r in types_rows]
 
-        lines = [f"## AI Scout 每日精选 ({datetime.now(CST).strftime('%Y-%m-%d')})\n"]
-        lines.append(f"共 {len(projects)} 个高价值AI项目：\n")
+        if not available_types:
+            return json.dumps({
+                "date": datetime.now(CST).strftime("%Y-%m-%d"),
+                "items": [],
+                "note": "No enriched projects yet. Run enrichment first."
+            }, indent=2, ensure_ascii=False)
 
-        for i, p in enumerate(projects, 1):
-            score = p.get("composite_score", 0)
-            stars = p.get("latest_snapshot", {}).get("stars", "?") if "latest_snapshot" in p else "?"
-            cat = p.get("category", "other")
-            lines.append(
-                f"**{i}. [{score:.0f}分] [{cat}] {p['full_name']}**\n"
-                f"   {p.get('description', '')[:120]}\n"
-                f"   {p.get('url', '')}\n"
-            )
+        picks = []
+        seen_ids = set()
 
-        return "\n".join(lines)
+        # Pick the top project from each product type (up to 5 types)
+        for pt in available_types[:5]:
+            row = con.execute(
+                """SELECT p.id, p.full_name, p.url, p.description, p.product_type,
+                          p.summary, p.solves, p.compatible_with, p.install,
+                          p.integration_shape, p.requires, p.llm_quality_score,
+                          COALESCE(s.stars, 0) as stars
+                   FROM projects p
+                   LEFT JOIN snapshots s ON s.project_id = p.id
+                       AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM snapshots WHERE project_id = p.id)
+                   WHERE p.is_active = 1 AND p.product_type = ? AND p.summary IS NOT NULL
+                   ORDER BY COALESCE(p.llm_quality_score, 0) * 0.6 + COALESCE(s.stars, 0) / 1000.0 DESC
+                   LIMIT 1""",
+                (pt,)
+            ).fetchone()
+            if row and row["id"] not in seen_ids:
+                manifest = _format_manifest(dict(row))
+                manifest["why_now"] = _compute_why_now(con, row["id"])
+                picks.append(manifest)
+                seen_ids.add(row["id"])
+
+        # Sort picks by quality score descending
+        picks.sort(key=lambda x: x.get("llm_quality_score", 0), reverse=True)
+
+        result = {
+            "date": datetime.now(CST).strftime("%Y-%m-%d"),
+            "total_enriched": con.execute(
+                "SELECT COUNT(*) FROM projects WHERE is_active=1 AND product_type IS NOT NULL"
+            ).fetchone()[0],
+            "items": picks,
+        }
+        return json.dumps(result, indent=2, ensure_ascii=False)
     finally:
         con.close()
 
 
-@mcp.tool(name="search_projects", description="搜索AI项目，支持按分类/关键词/评分过滤")
-def search_projects(
-    category: str = "",
-    min_score: float = 0,
-    limit: int = 10,
-    order_by: str = "composite_score",
+@mcp.tool(
+    name="recommend",
+    description=(
+        "Find AI agent capabilities matching a task description. "
+        "Returns 3-5 ranked candidates with install commands, trade-offs, and alternatives. "
+        "Example queries: 'extract tables from PDFs', 'add long-term memory to my agent', "
+        "'browse the web and fill forms'."
+    ),
+)
+def recommend(
+    query: str,
+    product_type: str = "",
+    runtime: str = "",
+    open_source_only: bool = False,
+    limit: int = 5,
 ) -> str:
+    """Find capabilities matching a natural language task description."""
     con = get_db()
     try:
-        projects = query_projects(con, category=category, min_score=min_score,
-                                  limit=limit, order_by=order_by)
-        if not projects:
-            return f"未找到符合条件的项目 (category={category}, min_score={min_score})"
+        # PRIMARY: Semantic search via TF-IDF (if index exists)
+        semantic_results = semantic_search(query, limit=limit)
 
-        cat_label = f"[{category}]" if category else "[全部]"
-        lines = [f"## AI项目搜索结果 {cat_label}\n"]
+        if semantic_results:
+            # Add why_now and extra context
+            for r in semantic_results:
+                r["why_now"] = _compute_why_now(con, r["id"])
 
-        for i, p in enumerate(projects, 1):
-            score = p.get("composite_score", 0)
-            cat = p.get("category", "other")
-            desc = (p.get("description") or "")[:100]
-            lines.append(
-                f"**{i}. [{score:.0f}分] [{cat}] {p['full_name']}** — {desc}\n"
-                f"   {p.get('url', '')}\n"
+            result = {
+                "query": query,
+                "total_candidates": len(semantic_results),
+                "search_mode": "semantic",
+                "candidates": semantic_results,
+                "filters_applied": {
+                    "product_type": product_type or "any",
+                    "runtime": runtime or "any",
+                    "open_source_only": open_source_only,
+                }
+            }
+            return json.dumps(result, indent=2, ensure_ascii=False)
+
+        # FALLBACK: Keyword search across summary + solves + description
+        # Split query into keywords for FTS-like matching
+        keywords = query.lower().split()
+        conditions = ["p.is_active = 1", "p.product_type IS NOT NULL", "p.summary IS NOT NULL"]
+        params = []
+
+        if product_type:
+            conditions.append("p.product_type = ?")
+            params.append(product_type)
+
+        if runtime:
+            conditions.append("(p.compatible_with LIKE ? OR p.compatible_with LIKE '%any%')")
+            params.append(f'%"{runtime}"%')
+
+        where_clause = " AND ".join(conditions)
+
+        # Score each project by keyword match relevance
+        # Build a relevance expression
+        match_parts = []
+        for kw in keywords[:5]:  # limit to 5 keywords
+            match_parts.append(
+                f"""(CASE WHEN LOWER(p.summary) LIKE '%{kw}%' THEN 3 ELSE 0 END
+                     + CASE WHEN LOWER(p.solves) LIKE '%{kw}%' THEN 4 ELSE 0 END
+                     + CASE WHEN LOWER(p.description) LIKE '%{kw}%' THEN 2 ELSE 0 END
+                     + CASE WHEN LOWER(p.product_type) LIKE '%{kw}%' THEN 1 ELSE 0 END)"""
             )
+        relevance_expr = " + ".join(match_parts) if match_parts else "0"
 
-        return "\n".join(lines)
+        sql = f"""
+            SELECT p.id, p.full_name, p.url, p.description, p.product_type,
+                   p.summary, p.solves, p.compatible_with, p.install,
+                   p.integration_shape, p.requires, p.llm_quality_score,
+                   COALESCE(s.stars, 0) as stars,
+                   ({relevance_expr}) as relevance
+            FROM projects p
+            LEFT JOIN snapshots s ON s.project_id = p.id
+                AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM snapshots WHERE project_id = p.id)
+            WHERE {where_clause}
+            ORDER BY relevance DESC, COALESCE(p.llm_quality_score, 0) DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        rows = con.execute(sql, params).fetchall()
+        candidates = [_format_manifest(dict(r)) for r in rows]
+
+        # If no keyword matches, fall back to quality-based selection
+        if not candidates or (candidates and candidates[0].get("relevance", 0) == 0):
+            fallback = _get_manifest_projects(
+                con, limit=limit, product_type=product_type or None,
+                order_by="quality"
+            )
+            if fallback:
+                candidates = fallback
+
+        result = {
+            "query": query,
+            "total_candidates": len(candidates),
+            "candidates": candidates,
+            "filters_applied": {
+                "product_type": product_type or "any",
+                "runtime": runtime or "any",
+                "open_source_only": open_source_only,
+            }
+        }
+        return json.dumps(result, indent=2, ensure_ascii=False)
     finally:
         con.close()
 
 
-@mcp.tool(name="get_trending", description="查询趋势AI项目（基于star增速）")
-def get_trending(days: int = 7, limit: int = 15) -> str:
-    con = get_db()
-    try:
-        results = query_trending(con, days=days, limit=limit)
-        if not results:
-            return "暂无趋势数据。"
-
-        lines = [f"## 🔥 AI项目趋势榜 (近{days}天)\n"]
-        for i, r in enumerate(results, 1):
-            stars_7d = r.get("stars_7d", 0)
-            current = r.get("current_stars", 0)
-            cat = r.get("category", "other")
-            desc = (r.get("description") or "")[:80]
-            lines.append(
-                f"**{i}. ⬆️+{stars_7d} 7d [{cat}] {r['full_name']}** (⭐{current})\n"
-                f"   {desc}\n"
-            )
-
-        return "\n".join(lines)
-    finally:
-        con.close()
-
-
-@mcp.tool(name="project_detail", description="获取单个AI项目的详细信息（含评分、历史、HN讨论）")
+@mcp.tool(
+    name="project_detail",
+    description=(
+        "Get the full manifest for a specific project by full_name (owner/repo). "
+        "Returns product_type, summary, solves, install commands, quality score, "
+        "star count, and compatibility info."
+    ),
+)
 def project_detail(full_name: str) -> str:
+    """Get detailed manifest for a specific project."""
     con = get_db()
     try:
-        detail = get_project_detail(con, full_name)
-        if not detail:
-            return f"未找到项目: {full_name}"
+        row = con.execute(
+            """SELECT p.*,
+                      COALESCE(s.stars, 0) as stars,
+                      COALESCE(s.forks, 0) as forks,
+                      COALESCE(s.stars_7d, 0) as stars_7d,
+                      COALESCE(s.stars_24h, 0) as stars_24h,
+                      sc.composite_score, sc.momentum_score, sc.quality_score
+               FROM projects p
+               LEFT JOIN snapshots s ON s.project_id = p.id
+                   AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM snapshots WHERE project_id = p.id)
+               LEFT JOIN scores sc ON sc.project_id = p.id
+                   AND sc.score_date = (SELECT MAX(score_date) FROM scores WHERE project_id = p.id)
+               WHERE p.full_name = ?""",
+            (full_name,)
+        ).fetchone()
 
-        lines = [f"## {detail['full_name']}\n"]
-        lines.append(f"**URL**: {detail.get('url', '')}\n")
-        lines.append(f"**分类**: {detail.get('category', 'other')} / {detail.get('subcategory', '')}\n")
-        lines.append(f"**描述**: {detail.get('description', '')}\n")
+        if not row:
+            return json.dumps({"error": f"Project not found: {full_name}"}, ensure_ascii=False)
 
-        # 最新快照
-        snap = detail.get("latest_snapshot", {})
-        if snap:
-            lines.append(f"\n### 最新数据 ({snap.get('snapshot_date', '')})\n")
-            lines.append(f"- ⭐ Stars: {snap.get('stars', 0)}")
-            lines.append(f"- 🍴 Forks: {snap.get('forks', 0)}")
-            lines.append(f"- ⬆️ 7天增速: +{snap.get('stars_7d', 0)}")
-            lines.append(f"- ⬆️ 24h增速: +{snap.get('stars_24h', 0)}")
-            lines.append(f"- 💬 HN热度: {snap.get('hn_points', 0)} points")
+        result = _format_manifest(dict(row))
+        result["why_now"] = _compute_why_now(con, row["id"])
 
-        # 评分
-        score = detail.get("latest_score", {})
-        if score:
-            lines.append(f"\n### 评分\n")
-            lines.append(f"- 🏆 综合: {score.get('composite_score', 0):.1f}")
-            lines.append(f"- 🚀 动量: {score.get('momentum_score', 0):.1f}")
-            lines.append(f"- 💎 质量: {score.get('quality_score', 0):.1f}")
-            lines.append(f"- 🏷️ 分类: {score.get('category_score', 0):.1f}")
-            lines.append(f"- 📊 排名: #{score.get('rank_total', '?')}")
+        # Add audit trail
+        audits = con.execute(
+            "SELECT timestamp, action, reason FROM audit_log WHERE target_ref = ? ORDER BY timestamp DESC LIMIT 3",
+            (full_name,)
+        ).fetchall()
+        result["audit_trail"] = [dict(a) for a in audits]
 
-        # HN讨论
-        hn_refs = detail.get("hn_refs", [])
-        if hn_refs:
-            lines.append(f"\n### Hacker News 讨论\n")
-            for ref in hn_refs[:5]:
-                lines.append(f"- [{ref.get('points', 0)}pts] {ref.get('title', '')} — {ref.get('hn_url', '')}")
-
-        return "\n".join(lines)
+        return json.dumps(result, indent=2, ensure_ascii=False)
     finally:
         con.close()
 
 
-@mcp.tool(name="scout_stats", description="获取AI Scout数据库统计信息")
-def scout_stats() -> str:
-    con = get_db()
-    try:
-        stats = get_stats(con)
-        lines = ["## AI Scout 数据统计\nn"]
-        lines.append(f"- 📦 总项目数: {stats.get('total_projects', 0)}")
-        lines.append(f"- 📊 快照记录: {stats.get('total_snapshots', 0)}")
-        lines.append(f"- 💬 HN引用: {stats.get('total_hn_refs', 0)}")
-        lines.append(f"- 📅 最新采集: {stats.get('latest_snapshot_date', 'N/A')}")
-        lines.append(f"- 📅 最新评分: {stats.get('latest_score_date', 'N/A')}")
-
-        cats = stats.get("by_category", {})
-        if cats:
-            lines.append("\n### 按分类\n")
-            for cat, cnt in cats.items():
-                lines.append(f"- {cat}: {cnt}")
-
-        return "\n".join(lines)
-    finally:
-        con.close()
-
+# =============================================================================
+# Entry point
+# =============================================================================
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="AI Scout MCP Server")
+    parser = argparse.ArgumentParser(description="AI Scout MCP Server v0.4")
     parser.add_argument("--streamable-http", action="store_true",
                         help="Run as HTTP server instead of stdio")
     parser.add_argument("--host", default="0.0.0.0")

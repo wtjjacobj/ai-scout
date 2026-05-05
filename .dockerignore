@@ -1,31 +1,21 @@
-# Python
+.venv/
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
 dist/
 build/
-.venv/
-
-# Output
 output/
-
-# Temp build scripts
+.git/
+.serena/
+*.log
 batch_write.py
 batch2_manifests.json
 batch2_write.py
 batch3_enrich.py
-
-# Serena
-.serena/
-
-# Database temp files (keep main db + index for deployment)
 data/ai_scout.db-shm
 data/ai_scout.db-wal
 data/.fuse_hidden*
 data/ai_scout.db.bak-*
 data/.gitkeep
 src/data/
-
-# Logs
-*.log
