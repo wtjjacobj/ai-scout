@@ -45,9 +45,10 @@ def _get_manifest_projects(con, limit=20, offset=0, product_type=None,
     if product_type:
         where.append("p.product_type = ?")
         params.append(product_type)
-    if min_quality > 0:
-        where.append("COALESCE(p.llm_quality_score, 0) >= ?")
-        params.append(min_quality)
+    # Default quality gate: only surface LLM-enriched projects (q >= 50)
+    effective_min = max(min_quality, 50) if min_quality <= 0 else min_quality
+    where.append("COALESCE(p.llm_quality_score, 0) >= ?")
+    params.append(effective_min)
 
     where_clause = " AND ".join(where)
 
@@ -139,6 +140,7 @@ def daily_brief() -> str:
         types_rows = con.execute(
             """SELECT DISTINCT product_type FROM projects
                WHERE is_active = 1 AND product_type IS NOT NULL AND summary IS NOT NULL
+               AND COALESCE(llm_quality_score, 0) >= 50
                ORDER BY product_type"""
         ).fetchall()
         available_types = [r["product_type"] for r in types_rows]
@@ -164,6 +166,7 @@ def daily_brief() -> str:
                    LEFT JOIN snapshots s ON s.project_id = p.id
                        AND s.snapshot_date = (SELECT MAX(snapshot_date) FROM snapshots WHERE project_id = p.id)
                    WHERE p.is_active = 1 AND p.product_type = ? AND p.summary IS NOT NULL
+                   AND COALESCE(p.llm_quality_score, 0) >= 50
                    ORDER BY COALESCE(p.llm_quality_score, 0) * 0.6 + COALESCE(s.stars, 0) / 1000.0 DESC
                    LIMIT 1""",
                 (pt,)
@@ -232,7 +235,8 @@ def recommend(
         # FALLBACK: Keyword search across summary + solves + description
         # Split query into keywords for FTS-like matching
         keywords = query.lower().split()
-        conditions = ["p.is_active = 1", "p.product_type IS NOT NULL", "p.summary IS NOT NULL"]
+        conditions = ["p.is_active = 1", "p.product_type IS NOT NULL", "p.summary IS NOT NULL",
+                      "COALESCE(p.llm_quality_score, 0) >= 50"]
         params = []
 
         if product_type:

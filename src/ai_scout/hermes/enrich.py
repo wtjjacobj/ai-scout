@@ -39,7 +39,7 @@ from ..db import get_db, CST
 from ..migrate_v04 import PRODUCT_TYPES, INTEGRATION_SHAPES, RUNTIMES
 
 DEFAULT_MODEL = os.environ.get("AI_SCOUT_LLM_MODEL", "glm-5.1")
-DEFAULT_BASE_URL = os.environ.get("AI_SCOUT_LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+DEFAULT_BASE_URL = os.environ.get("AI_SCOUT_LLM_BASE_URL", "https://open.bigmodel.cn/api/coding/paas/v4")
 DEFAULT_API_KEY = os.environ.get("AI_SCOUT_LLM_API_KEY", "")
 README_MAX_CHARS = 12_000  # Trim long READMEs to keep token cost predictable
 
