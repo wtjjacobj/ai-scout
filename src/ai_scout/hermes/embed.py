@@ -19,16 +19,13 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# Resolve project root: src/ai_scout/hermes/ -> project root is parents[3]
-# (src/ai_scout/hermes/embed.py -> parents[0]=hermes, [1]=ai_scout, [2]=src, [3]=project_root)
-_PROJECT_ROOT = Path(__file__).parents[3]
-DB_PATH = Path(os.environ.get(
-    "AI_SCOUT_DB",
-    str(_PROJECT_ROOT / "data" / "ai_scout.db")
-))
+# Resolve data directory: use the same directory as the DB (from ai_scout.db module)
+from ..db import DB_PATH as _DB_PATH
+_DATA_DIR = _DB_PATH.parent
+DB_PATH = _DB_PATH
 INDEX_PATH = Path(os.environ.get(
     "AI_SCOUT_INDEX",
-    str(_PROJECT_ROOT / "data" / "tfidf_index.pkl")
+    str(_DATA_DIR / "tfidf_index.pkl")
 ))
 
 
