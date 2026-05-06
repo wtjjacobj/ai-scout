@@ -1,27 +1,23 @@
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install system deps
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-
-# Copy project files
+# Install dependencies
 COPY pyproject.toml .
-COPY src/ src/
-
-# Install the package + scikit-learn for semantic search
 RUN pip install --no-cache-dir .
 
-# Copy pre-built database and index
-# These are built locally and included via .dockerignore exception
-COPY data/ai_scout.db /app/data/ai_scout.db
-COPY data/tfidf_index.pkl /app/data/tfidf_index.pkl
+# Copy source code
+COPY src/ src/
 
-# Environment variables
+# Copy data (read-only DB + TF-IDF index)
+COPY data/ data/
+
+# Environment
 ENV AI_SCOUT_DB=/app/data/ai_scout.db
-ENV AI_SCOUT_INDEX=/app/data/tfidf_index.pkl
+ENV PYTHONUNBUFFERED=1
 
-# Expose MCP server via HTTP
-EXPOSE 8900
+# Expose port
+EXPOSE 8080
 
-CMD ["ai-scout", "--streamable-http", "--host", "0.0.0.0", "--port", "8900"]
+# Run as streamable-http server
+CMD ["python", "-m", "ai_scout.server", "--streamable-http", "--host", "0.0.0.0", "--port", "8080"]
