@@ -20,8 +20,8 @@ Designed to be runnable two ways:
     from ai_scout.hermes.enrich import enrich_project
     manifest = enrich_project(con, project_id, dry_run=False)
 
-Requires ANTHROPIC_API_KEY in env (or pass --api-key). Default model is
-claude-sonnet-4-5 (override with AI_SCOUT_LLM_MODEL or --model).
+Requires AI_SCOUT_LLM_API_KEY in env. Default model is
+glm-5.1 (override with AI_SCOUT_LLM_MODEL or --model).
 """
 
 import argparse
@@ -38,9 +38,9 @@ import requests
 from ..db import get_db, CST
 from ..migrate_v04 import PRODUCT_TYPES, INTEGRATION_SHAPES, RUNTIMES
 
-DEFAULT_MODEL = os.environ.get("AI_SCOUT_LLM_MODEL", "glm-4-flash")
+DEFAULT_MODEL = os.environ.get("AI_SCOUT_LLM_MODEL", "glm-5.1")
 DEFAULT_BASE_URL = os.environ.get("AI_SCOUT_LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
-DEFAULT_API_KEY = os.environ.get("AI_SCOUT_LLM_API_KEY", "5003ca42c187418494a77ab42c6e322a.1TsYdhtOC9KSb5Ux")
+DEFAULT_API_KEY = os.environ.get("AI_SCOUT_LLM_API_KEY", "")
 README_MAX_CHARS = 12_000  # Trim long READMEs to keep token cost predictable
 
 

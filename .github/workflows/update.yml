@@ -1,0 +1,85 @@
+name: AI Scout Daily Update
+
+on:
+  schedule:
+    # UTC 02:00 = CST 10:00 每天
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_collect:
+        description: 'Skip data collection'
+        type: boolean
+        default: false
+      skip_enrich:
+        description: 'Skip LLM enrichment (save API cost)'
+        type: boolean
+        default: false
+      enrich_limit:
+        description: 'Max projects to enrich (empty = all unenriched)'
+        type: number
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Run pipeline
+        env:
+          AI_SCOUT_LLM_API_KEY: ${{ secrets.AI_SCOUT_LLM_API_KEY }}
+          AI_SCOUT_LLM_MODEL: glm-5.1
+          AI_SCOUT_LLM_BASE_URL: https://open.bigmodel.cn/api/paas/v4
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ARGS=""
+          [ "${{ github.event.inputs.skip_collect }}" = "true" ] && ARGS="$ARGS --skip-collect"
+          [ "${{ github.event.inputs.skip_enrich }}" = "true" ] && ARGS="$ARGS --skip-enrich"
+          [ -n "${{ github.event.inputs.enrich_limit }}" ] && ARGS="$ARGS --enrich-limit ${{ github.event.inputs.enrich_limit }}"
+          python run_pipeline.py $ARGS
+
+      - name: Commit and push updated data
+        run: |
+          git config user.name "ai-scout-bot"
+          git config user.email "bot@ai-scout.dev"
+          git add data/ai_scout.db data/tfidf_index.pkl
+          if git diff --cached --quiet; then
+            echo "No data changes to commit"
+          else
+            git commit -m "📊 data update $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Trigger Smithery rebuild
+        if: success()
+        run: |
+          # Use Smithery API to trigger server rebuild
+          if [ -n "$SMITHERY_API_KEY" ]; then
+            echo "Triggering Smithery rebuild..."
+            curl -s -X POST \
+              "https://smithery.ai/api/servers/wtjemail/ai-scout/deploy" \
+              -H "Authorization: Bearer $SMITHERY_API_KEY" \
+              -H "Content-Type: application/json" \
+              || echo "Smithery rebuild trigger failed (non-critical)"
+          else
+            echo "SMITHERY_API_KEY not set, skipping rebuild trigger"
+          fi
+        env:
+          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
