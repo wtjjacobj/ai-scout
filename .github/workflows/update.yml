@@ -47,6 +47,8 @@ jobs:
           AI_SCOUT_LLM_API_KEY: ${{ secrets.AI_SCOUT_LLM_API_KEY }}
           AI_SCOUT_LLM_MODEL: glm-5.1
           AI_SCOUT_LLM_BASE_URL: https://open.bigmodel.cn/api/paas/v4
+          AI_SCOUT_DB: ${{ github.workspace }}/data/ai_scout.db
+          AI_SCOUT_INDEX: ${{ github.workspace }}/data/tfidf_index.pkl
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ARGS=""

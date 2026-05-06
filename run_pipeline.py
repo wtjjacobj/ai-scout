@@ -103,6 +103,9 @@ def main():
             print("❌ AI_SCOUT_LLM_API_KEY not set")
             sys.exit(1)
 
+    # Ensure data directory exists
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
     # Run pipeline
     if not args.skip_collect:
         step_collect()
